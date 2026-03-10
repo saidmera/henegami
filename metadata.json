@@ -1,0 +1,7 @@
+{
+  "name": "chenegami",
+  "description": "A comprehensive affiliate management platform with role-based access, promo code tracking, AI-powered insights, and product management.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "appId": "com.chenegami.app",
+  "appName": "Chenegami",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
