@@ -3,6 +3,8 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -10,52 +12,80 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Source
+      # ── 1. Checkout ───────────────────────────────────────────────────────────
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      # Install Node 22
+      # ── 2. Node.js ────────────────────────────────────────────────────────────
+      # Node 20 LTS is safer than 22 for native addons (better-sqlite3)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: 'npm'
+          node-version: 20
+          cache: npm
 
-      # Install npm dependencies
-      - name: Install Dependencies
-        run: npm install
-
-      # Build web app (Vite/React)
-      - name: Build Web App
-        run: npm run build
-
-      # Setup Java 21 for Gradle
-      - name: Setup Java
+      # ── 3. Java (must come BEFORE Android SDK) ────────────────────────────────
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: zulu
-          java-version: 21
+          distribution: temurin
+          java-version: 17
 
-      # Setup Android SDK
+      # ── 4. Android SDK ────────────────────────────────────────────────────────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # Add Android platform if missing and copy assets
-      - name: Setup Capacitor Android
-        run: |
-          npx cap add android || true
-          npx cap copy android
-          npx cap sync android
+      # ── 5. Install npm deps ───────────────────────────────────────────────────
+      # --ignore-scripts skips native compilation of better-sqlite3 which is
+      # a server-only dep and not needed in the Vite/Capacitor build.
+      - name: Install dependencies
+        run: npm install --ignore-scripts
 
-      # Build APK
-      - name: Build APK
+      # ── 6. Inject secrets as .env ─────────────────────────────────────────────
+      # Without this, Supabase init fails silently → blank screen
+      - name: Create .env file
+        run: |
+          echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" > .env
+          echo "VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}" >> .env
+
+      # ── 7. Vite build → dist/ ────────────────────────────────────────────────
+      - name: Build web assets
+        run: npm run build
+
+      # Sanity check: make sure dist/index.html was actually produced
+      - name: Verify dist output
+        run: |
+          test -f dist/index.html || (echo "ERROR: dist/index.html missing!" && exit 1)
+          echo "dist/index.html exists ✓"
+          ls -lah dist/
+
+      # ── 8. Capacitor: add android platform if not in repo ────────────────────
+      - name: Add Android platform (if missing)
+        run: npx cap add android 2>/dev/null || echo "Android platform already exists, skipping."
+
+      # ── 9. Capacitor sync (copies dist/ into android assets + updates plugins) ─
+      # Use ONLY sync — do not also run `cap copy`, it's redundant and can conflict
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      # Sanity check: confirm assets were copied into Android project
+      - name: Verify Android assets
+        run: |
+          test -f android/app/src/main/assets/public/index.html || \
+            (echo "ERROR: index.html not found in Android assets!" && exit 1)
+          echo "Android assets synced ✓"
+
+      # ── 10. Build debug APK ───────────────────────────────────────────────────
+      - name: Build debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-      # Upload APK artifact
+      # ── 11. Upload APK artifact ───────────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug.apk
+          name: chenegami-debug-${{ github.sha }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
